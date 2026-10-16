@@ -1,3 +1,46 @@
 spring:
   application:
     name: ms-rutaexpress-notify
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME}
+    password: ${RABBITMQ_PASSWORD}
+    virtual-host: ${RABBITMQ_VHOST:/}
+    ssl:
+      enabled: ${RABBITMQ_SSL_ENABLED:false}
+  mail:
+    host: ${SMTP_HOST:localhost}
+    port: ${SMTP_PORT:1025}
+    username: ${SMTP_USERNAME:}
+    password: ${SMTP_PASSWORD:}
+    properties:
+      mail.smtp.auth: ${SMTP_AUTH:false}
+      mail.smtp.starttls.enable: ${SMTP_STARTTLS:false}
+      mail.smtp.starttls.required: ${SMTP_STARTTLS:false}
+      mail.smtp.connectiontimeout: 5000
+      mail.smtp.timeout: 10000
+      mail.smtp.writetimeout: 10000
+server:
+  address: ${MANAGEMENT_ADDRESS:127.0.0.1}
+  port: ${MANAGEMENT_PORT:8083}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
+  endpoint:
+    health:
+      show-details: never
+  health:
+    mail:
+      enabled: ${EMAIL_ENABLED:false}
+notify:
+  email:
+    enabled: ${EMAIL_ENABLED:false}
+    from: ${SMTP_FROM:notify@example.invalid}
+  storage:
+    path: ${NOTIFY_STORAGE_PATH:./data}
+  idempotency:
+    capacity: ${IDEMPOTENCY_CAPACITY:10000}
+    ttl-seconds: ${IDEMPOTENCY_TTL_SECONDS:86400}
