@@ -2,6 +2,8 @@ spring:
   application:
     name: ms-rutaexpress-notify
   rabbitmq:
+    # Exchanges, queues and bindings are managed by rabbitmq-admin.
+    dynamic: false
     host: ${RABBITMQ_HOST:localhost}
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USERNAME}
@@ -36,6 +38,9 @@ management:
     mail:
       enabled: ${EMAIL_ENABLED:false}
 notify:
+  listeners:
+    warehouse-enabled: ${WAREHOUSE_LISTENER_ENABLED:false}
+    label-enabled: ${LABEL_LISTENER_ENABLED:false}
   email:
     enabled: ${EMAIL_ENABLED:false}
     from: ${SMTP_FROM:notify@example.invalid}
