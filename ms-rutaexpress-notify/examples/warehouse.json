@@ -1,0 +1,17 @@
+{
+  "type": "warehouse.ticket.v1",
+  "eventId": "ba6d1ddb-497d-4f6a-9392-5ff1c1d86322",
+  "timestamp": "2026-10-15T18:00:00-03:00",
+  "traceId": "trace-shipment-42",
+  "correlationId": "shipment-42",
+  "payload": {
+    "id": 42,
+    "trackingNumber": "RE-42",
+    "destinatarioNombre": "Ana Pérez",
+    "destinatarioEmail": "ana@example.com",
+    "direccionOrigen": "Bodega Central, Santiago",
+    "direccionDestino": "Avenida Ejemplo 123, Santiago",
+    "servicioId": 1,
+    "status": "ACEPTADO"
+  }
+}
