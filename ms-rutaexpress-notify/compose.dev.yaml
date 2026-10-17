@@ -1,0 +1,45 @@
+# Solo desarrollo. Credenciales efímeras de ejemplo, nunca usar en producción.
+services:
+  rabbitmq:
+    image: rabbitmq:4.1-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: notify_dev
+      RABBITMQ_DEFAULT_PASS: local_only_change_me
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    volumes:
+      - rabbit-dev:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  mailpit:
+    image: axllent/mailpit:v1.27
+    ports:
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
+  notify:
+    profiles: ["app"]
+    build: .
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USERNAME: notify_dev
+      RABBITMQ_PASSWORD: local_only_change_me
+      SMTP_HOST: mailpit
+      SMTP_FROM: notify@example.com
+      EMAIL_ENABLED: "true"
+      MANAGEMENT_ADDRESS: 0.0.0.0
+    ports:
+      - "127.0.0.1:8083:8083"
+    volumes:
+      - notify-data:/app/data
+volumes:
+  rabbit-dev:
+  notify-data:
