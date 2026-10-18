@@ -1,0 +1,8 @@
+{
+  "shipmentId": 42,
+  "trackingNumber": "RUTA-0123456789AB",
+  "status": "ACEPTADO",
+  "destinatarioNombre": "Ana Pérez",
+  "destinatarioEmail": "ana@example.com",
+  "timestamp": "2026-10-18T19:30:00.123456Z"
+}
