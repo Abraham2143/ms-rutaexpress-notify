@@ -15,6 +15,17 @@ final class Fixtures {
                  "direccionDestino":"Avenida Ejemplo 123, Santiago","servicioId":1,"status":"ACEPTADO"%s}}
                 """).formatted(type,eventId,flow.equals("email") ? ",\"channel\":\"EMAIL\"" : "").getBytes(StandardCharsets.UTF_8);
     }
+    /** Flat JSON exactly as ms-rutaexpress-shipments publishes it (record ShipmentNotification). */
+    static String shipmentsJson(String shipmentId, String status, String timestamp) {
+        return ("""
+                {"shipmentId":%s,"trackingNumber":"RUTA-0123456789AB","status":"%s",
+                 "destinatarioNombre":"Ana Pérez","destinatarioEmail":"ana@example.com","timestamp":"%s"}
+                """).formatted(shipmentId,status,timestamp);
+    }
+    static byte[] shipments(String status) {
+        return shipmentsJson("42",status,"2026-10-18T19:30:00.123456Z").getBytes(StandardCharsets.UTF_8);
+    }
+    static byte[] shipments() { return shipments("ACEPTADO"); }
     static Message message(byte[] bytes) {
         var properties=new MessageProperties(); properties.setDeliveryTag(7);
         properties.setContentType("application/json");

@@ -18,9 +18,22 @@ public class CommandDecoder {
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     private final Validator validator;
     public CommandDecoder(Validator validator) { this.validator = validator; }
+
+    /**
+     * Decodes a message body for the given flow ("email", "warehouse" or "label").
+     * The email flow accepts two formats: the v1 envelope and the flat notification published by
+     * ms-rutaexpress-shipments, which is converted to the same {@link Command}. Warehouse and label
+     * accept only the v1 envelope.
+     */
     public Command decode(byte[] body, String flow) throws Exception {
         if (body.length > 65536) throw new IllegalArgumentException("message_too_large");
-        Command command = mapper.readValue(body, Command.class);
+        // Only the email flow looks at the structure first, to tell the Shipments format from the envelope.
+        // Parsing is strict (duplicate keys, trailing tokens), so both formats are rejected the same way.
+        JsonNode tree = "email".equals(flow) ? mapper.readTree(body) : null;
+        boolean fromShipments = ShipmentNotificationFormat.matches(tree);
+        Command command = fromShipments
+                ? ShipmentNotificationFormat.toCommand(tree)
+                : mapper.readValue(body, Command.class);
         if (command == null || !validator.validate(command).isEmpty())
             throw new IllegalArgumentException("invalid_command");
         String expected = switch(flow) {
@@ -30,11 +43,15 @@ public class CommandDecoder {
             default -> throw new IllegalArgumentException("unknown_flow");
         };
         if (!expected.equals(command.type())) throw new IllegalArgumentException("wrong_type");
+        var payload = command.payload();
+        if (!fromShipments && (payload.direccionOrigen() == null || payload.direccionDestino() == null
+                || payload.servicioId() == null))
+            throw new IllegalArgumentException("invalid_command");
         if (flow.equals("email")) {
-            if (command.payload().channel() == null ||
-                    !java.util.Set.of("ACEPTADO", "EN_RUTA", "ENTREGADO").contains(command.payload().status()))
+            if (payload.channel() == null ||
+                    !java.util.Set.of("ACEPTADO", "EN_RUTA", "ENTREGADO").contains(payload.status()))
                 throw new IllegalArgumentException("invalid_notification");
-        } else if (command.payload().channel() != null) {
+        } else if (payload.channel() != null) {
             throw new IllegalArgumentException("channel_not_applicable");
         }
         return command;

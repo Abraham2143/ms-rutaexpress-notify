@@ -1,43 +1,87 @@
 # RutaExpress Notify
 
-## Estado actual: inspección de q.cmd.email
+Worker Java 21 / Spring Boot 4.1.1. Consume comandos RabbitMQ, envía email SMTP, genera tickets de
+picking UTF-8 y etiquetas PDF reales. No utiliza base de datos, Kafka ni Azure Entra ID. No tiene API de
+negocio. BFF autentica las peticiones; Shipments produce los eventos.
 
-El listener de email recibe el cuerpo crudo, lo decodifica a String UTF-8 y registra
-`Mensaje recibido de q.cmd.email: <payload>`. No exige JSON, DTO ni envelope y no
-llama a SMTP, aunque EMAIL_ENABLED esté habilitado. Bytes UTF-8 inválidos se muestran
-con caracteres de reemplazo. Se confirma con ACK manual después del log: esta prueba
-consume el mensaje, no lo deja pendiente para enviarlo después.
+## Estado actual
 
-Notify **no declara ni administra exchanges, colas o bindings**: se eliminó la
-topología de RabbitConfig, `spring.rabbitmq.dynamic=false` deshabilita RabbitAdmin
-y el contenedor tiene autoDeclare=false. `ms-rutaexpress-rabbitmq-admin` debe crear
-`q.cmd.email` en el mismo virtual host antes del arranque. No requiere SMTP.
+Notify consume las tres colas de comandos con **el mismo flujo**: decodificar y validar, descartar
+duplicados por `eventId`, ejecutar el efecto y **solo entonces** confirmar con `basicAck`. Cualquier
+fallo (mensaje inválido, SMTP, almacenamiento) recibe `basicNack(requeue=false)` y RabbitMQ lo envía a
+la DLQ de su cola. Nunca se registra un éxito si el efecto no se completó.
 
-Bodega y etiquetas conservan su implementación, pero sus listeners arrancan solo
-con WAREHOUSE_LISTENER_ENABLED=true y LABEL_LISTENER_ENABLED=true respectivamente.
-Así la inspección inicial solo necesita q.cmd.email. Sus colas también deben ser
-aprovisionadas externamente. Los servicios SMTP y el contrato anterior se conservan
-para trabajo futuro y pruebas; el listener de email no los utiliza.
+| Cola | Consumidor | Efecto | Cómo se activa |
+| --- | --- | --- | --- |
+| `q.cmd.email` | `EmailListener` → `EmailService` | Correo SMTP | Siempre arranca. El envío real exige `EMAIL_ENABLED=true` |
+| `q.cmd.warehouse` | `WarehouseListener` → `WarehouseService` | Ticket de picking `.txt` | `WAREHOUSE_LISTENER_ENABLED=true` |
+| `q.cmd.label` | `LabelListener` → `LabelService` | Etiqueta PDF | `LABEL_LISTENER_ENABLED=true` |
+
+`q.cmd.email` acepta dos formatos: la notificación plana que publica Shipments y el envelope v1
+(ver [Contrato JSON](#contrato-json)). Bodega y etiqueta aceptan únicamente el envelope v1.
+
+### Correo con SMTP desactivado (`EMAIL_ENABLED=false`, valor por defecto)
+
+Es una configuración válida y es la recomendada mientras no existan credenciales SMTP. `EmailService`
+rechaza todo comando con `smtp_channel_disabled`: no se llama a SMTP, el mensaje recibe NACK sin
+reencolado y termina en `q.cmd.email.dlq`. No se cuenta como procesado ni se registra en la
+idempotencia, de modo que se puede **republicar desde la DLQ con el mismo `eventId`** cuando SMTP esté
+configurado. Para demostrar el manejo de errores basta publicar un mensaje válido y ver cómo llega a la
+DLQ con `x-first-death-reason=rejected`.
+
+### Privacidad de los logs
+
+Notify ya no registra el cuerpo de los mensajes ni datos del destinatario (nombre, email, direcciones).
+Cada mensaje produce una línea con `eventId`, `traceId`, `correlationId`, cola, resultado
+(`processed`, `duplicate` o `failed`) y, si falló, un código de motivo propio (`invalid_command`,
+`smtp_channel_disabled`, …) o solo el nombre de la clase de la excepción. Los mensajes de excepción de
+Jackson o SMTP no se registran porque pueden citar el contenido. Aun así, la DLQ y los artefactos
+contienen datos personales: restringe su acceso.
+
+### Variables de entorno para AWS
+
+| Variable | Valor | Motivo |
+| --- | --- | --- |
+| `RABBITMQ_HOST` | Host del broker (no `localhost` dentro de Docker) | Obligatoria en AWS |
+| `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` | Usuario dedicado de Notify | Obligatorias, sin valor por defecto |
+| `RABBITMQ_PORT` / `RABBITMQ_VHOST` | `5672` / `/` | Solo si difieren |
+| `WAREHOUSE_LISTENER_ENABLED` | `true` | Sin ella `q.cmd.warehouse` queda sin consumidor |
+| `LABEL_LISTENER_ENABLED` | `true` | Sin ella `q.cmd.label` queda sin consumidor |
+| `EMAIL_ENABLED` | `false` | No enviar correo real; los comandos van a la DLQ |
+| `NOTIFY_STORAGE_PATH` | `/app/data` (ya fijado en la imagen) | Monta un volumen para ticket y etiqueta |
+
+No definas `SMTP_*` mientras `EMAIL_ENABLED=false`. Las colas y exchanges deben existir antes de arrancar:
+los crea `ms-rutaexpress-rabbitmq-admin`, Notify no declara topología (`spring.rabbitmq.dynamic=false`,
+`autoDeclare=false`). Ejemplo de ejecución en Docker (los valores entre `<>` los das tú, nunca los
+guardes en el repositorio):
+
+```bash
+docker run -d --name notify --restart unless-stopped \
+  -e RABBITMQ_HOST=<host-del-broker> -e RABBITMQ_USERNAME=<usuario> -e RABBITMQ_PASSWORD=<clave> \
+  -e WAREHOUSE_LISTENER_ENABLED=true -e LABEL_LISTENER_ENABLED=true -e EMAIL_ENABLED=false \
+  -v notify-data:/app/data rutaexpress-notify
+```
 
 ### Prueba local desde PowerShell
 
-Desde esta carpeta (la que contiene pom.xml), usa JDK 21 y un RabbitMQ existente en
-localhost:5672. Configura en tu terminal o en IntelliJ las variables RABBITMQ_HOST,
-RABBITMQ_PORT, RABBITMQ_USERNAME y RABBITMQ_PASSWORD; opcionalmente RABBITMQ_VHOST
-(por defecto `/`). No guardes credenciales reales en archivos del repositorio.
+Desde esta carpeta (la que contiene pom.xml), usa JDK 21 y un RabbitMQ existente con la topología ya
+creada por rabbitmq-admin. Configura en tu terminal o en IntelliJ `RABBITMQ_HOST`, `RABBITMQ_PORT`,
+`RABBITMQ_USERNAME` y `RABBITMQ_PASSWORD` (opcionalmente `RABBITMQ_VHOST`, por defecto `/`). No guardes
+credenciales reales en archivos del repositorio.
 
 ```powershell
 $env:RABBITMQ_HOST = 'localhost'
 $env:RABBITMQ_PORT = '5672'
 # RABBITMQ_USERNAME y RABBITMQ_PASSWORD deben estar configuradas en este proceso.
+$env:WAREHOUSE_LISTENER_ENABLED = 'true'
+$env:LABEL_LISTENER_ENABLED = 'true'
 .\mvnw.cmd spring-boot:run
 ```
 
-Publica con el productor existente o desde RabbitMQ Management: en la cola
-q.cmd.email, usa Publish message con texto libre, por ejemplo `prueba Notify`, o
-un JSON de cualquier estructura. Comprueba el payload en el log de Notify.
-No necesitas acordar un formato ni iniciar Mailpit. Detén otras instancias de
-Notify que consuman la misma cola para que no reciban el mensaje de prueba.
+Publica desde RabbitMQ Management (exchange `cmd.direct`, routing key `email.send`) el contenido de
+[examples/email-shipments.json](examples/email-shipments.json) o de [examples/email.json](examples/email.json).
+Con `EMAIL_ENABLED=false` el mensaje aparece en `q.cmd.email.dlq`. Para ver un envío real sin salir a
+internet usa Mailpit (ver Compose). Detén otras instancias de Notify que consuman la misma cola.
 
 ```powershell
 .\mvnw.cmd test
@@ -45,23 +89,13 @@ Notify que consuman la misma cola para que no reciban el mensaje de prueba.
 .\mvnw.cmd '-Drabbit.integration=true' clean verify
 ```
 
-El test de contexto verifica que no existan beans de administración/declaración.
-La integración aprovisiona recursos exclusivamente como fixture dentro del broker
-aislado de Testcontainers, representando al administrador externo.
+El test de contexto verifica que no existan beans de administración/declaración. La integración
+aprovisiona recursos exclusivamente como fixture dentro del broker aislado de Testcontainers,
+representando al administrador externo.
 
-El Compose anterior se conserva como entorno de desarrollo opcional; arrancar un
-broker vacío con él **ya no crea las colas**. Usa rabbitmq-admin para aprovisionarlas.
-
-## Implementación previa y propuesta de contrato (referencia)
-
-El contenido siguiente describe los servicios previos y la propuesta v1. No es un
-requisito del listener de inspección de email ni implica administración por Notify.
-
-
-Worker Java 21 / Spring Boot 4.1.1. Consume comandos RabbitMQ, envía email SMTP,
-genera tickets de picking UTF-8 y etiquetas PDF reales. No utiliza base de datos,
-Kafka ni Azure Entra ID. No tiene API de negocio. BFF autentica las peticiones;
-Shipments será responsable de producir los comandos.
+El Compose se conserva como entorno de desarrollo opcional; arrancar un broker vacío con él **no crea
+las colas**. Usa rabbitmq-admin para aprovisionarlas. Compose activa `EMAIL_ENABLED=true` contra Mailpit
+solo para desarrollo.
 
 ## Arquitectura y estructura
 
@@ -72,18 +106,16 @@ Código bajo `src/main/java/cl/rutaexpress/ms_rutaexpress_notify/`:
 
 - `config/RabbitConfig`: ACK manual y errores del contenedor; sin topología.
 - `contract/Command`, `CommandDecoder`: envelope, payload y validación estricta.
+- `contract/ShipmentNotificationFormat`: convierte la notificación plana de Shipments (solo email) al mismo `Command`.
 - `messaging/*Listener`: un listener pequeño por flujo; `CommandHandler` coordina
   validación, idempotencia, métricas y ACK/NACK.
 - `processing/EmailService`, `WarehouseService`, `LabelService`: efectos reales.
 - `processing/ArtifactStore`: archivos deterministas y publicación atómica.
 - `processing/IdempotencyGuard`: registro acotado en memoria, sin BD.
 
-Se consultaron los README de [BFF](https://github.com/Abraham2143/ms-rutaexpress-bff),
-[Catalog](https://github.com/Abraham2143/ms-rutaexpress-catalog) y
-[Shipments](https://github.com/Abraham2143/ms-rutaexpress-shipments).
-No se inspeccionaron todos sus fuentes ni se ejecutaron esos servicios.
-El contrato siguiente es una **propuesta de integración v1**, no un contrato RabbitMQ
-ya implementado en Shipments. Los cambios están limitados a Notify.
+El formato plano se contrastó con el código de Shipments (`ShipmentNotification` y
+`ShipmentNotificationPublisher`); el envelope v1 es el contrato propio de Notify, ilustrado en
+`examples/`. No se ejecutaron los demás servicios y los cambios están limitados a Notify.
 
 ## RabbitMQ
 
@@ -92,13 +124,14 @@ Exchanges durables, sin auto-delete: `cmd.direct` (direct), `cmd.topic` (topic),
 
 | Cola | Binding cmd.direct | Binding cmd.topic | x-dead-letter-routing-key |
 | --- | --- | --- | --- |
-| q.cmd.email | email.send | email.* | email.dead |
-| q.cmd.warehouse | warehouse.ticket | warehouse.# | warehouse.dead |
-| q.cmd.label | label.gen | label.* | label.dead |
+| q.cmd.email | email.send | email.* | email.dlq |
+| q.cmd.warehouse | warehouse.ticket | warehouse.# | warehouse.dlq |
+| q.cmd.label | label.gen | label.* | label.dlq |
 
-En la topología propuesta, el administrador externo configura `x-dead-letter-exchange=cmd.dead.dlx`.
-Las colas `q.cmd.email.dlq`, `q.cmd.warehouse.dlq` y `q.cmd.label.dlq` están
-enlazadas a ese exchange con `email.dead`, `warehouse.dead` y `label.dead`.
+Esta es la topología que declara `ms-rutaexpress-rabbitmq-admin` (Notify no la modifica): cada cola
+principal tiene `x-dead-letter-exchange=cmd.dead.dlx`. Las colas `q.cmd.email.dlq`,
+`q.cmd.warehouse.dlq` y `q.cmd.label.dlq` están enlazadas a ese exchange con `email.dlq`,
+`warehouse.dlq` y `label.dlq`.
 No hay TTL, consumidor de DLQ ni retorno automático a la cola principal.
 Una topología preexistente incompatible exige migración operativa; RabbitMQ no
 permite cambiar argumentos de una cola existente por redeclaración.
@@ -115,7 +148,13 @@ los exchanges de comandos. TLS en producción (`RABBITMQ_SSL_ENABLED=true`, norm
 puerto 5671), certificados de confianza del JRE y redes privadas.
 Este repositorio no construye el clúster de producción ni infraestructura AWS.
 
-## Contrato JSON v1
+## Contrato JSON
+
+`q.cmd.email` acepta dos formatos; `q.cmd.warehouse` y `q.cmd.label` solo el envelope v1. Ambos formatos
+comparten límite de tamaño (64 KiB) y se analizan de forma estricta. En cualquier otro caso el
+mensaje se rechaza (NACK sin reencolado, DLQ).
+
+### Envelope v1 (email, bodega y etiqueta)
 
 Enviar JSON UTF-8 con `content_type=application/json`, tamaño máximo 64 KiB.
 Se rechazan JSON inválido, propiedades desconocidas, claves repetidas, JSON adicional,
@@ -146,7 +185,7 @@ No adjuntar JWT, credenciales ni objetos completos del modelo de persistencia.
 | status | CREADO, ACEPTADO, EN_BODEGA, EN_RUTA, ENTREGADO o CANCELADO |
 | channel | EMAIL o WEBPUSH, obligatorio para email.send.v1; omitido/null para bodega/etiqueta |
 
-Todos los campos del payload salvo la excepción de channel son obligatorios.
+Todos los campos del payload salvo la excepción de channel son obligatorios en el envelope v1.
 La propuesta usa una instantánea común con los datos disponibles en Shipments;
 no inventa SKU, pesos, cantidades, teléfono ni capacidad. `clienteId`, `creadoPor`
 y fechas del modelo no se necesitan para estos efectos y no se transmiten.
@@ -158,6 +197,42 @@ Ejemplos completos: [email](examples/email.json), [bodega](examples/warehouse.js
 email con el estado correspondiente y **un nuevo eventId**. Reintentar un mismo
 comando conserva eventId y contenido; no reutilizar IDs con datos distintos.
 Los ejemplos contienen datos ficticios.
+
+### Formato plano de Shipments (solo `q.cmd.email`)
+
+Es lo que publica hoy `ShipmentNotificationPublisher` en `cmd.direct` con la clave `email.send`
+([ejemplo](examples/email-shipments.json)):
+
+```json
+{"shipmentId":42,"trackingNumber":"RUTA-0123456789AB","status":"ACEPTADO",
+ "destinatarioNombre":"Ana Pérez","destinatarioEmail":"ana@example.com","timestamp":"2026-10-18T19:30:00.123456Z"}
+```
+
+| Campo | Tipo y regla |
+| --- | --- |
+| shipmentId | Número entero positivo (`Long`). Se rechazan texto, decimales, `null` y desbordes |
+| trackingNumber | Texto, máx. 80, ASCII alfanumérico, guion o guion bajo |
+| status | `ACEPTADO`, `EN_RUTA` o `ENTREGADO`. `CREADO`, `EN_BODEGA`, `CANCELADO` o un valor desconocido se rechazan |
+| destinatarioNombre | Texto no vacío, máx. 160, sin caracteres de control |
+| destinatarioEmail | Email, máx. 254, sin caracteres de control |
+| timestamp | Texto ISO-8601 en UTC terminado en `Z` (el `Instant` de Shipments), p. ej. `2026-10-18T19:30:00.123456Z` |
+
+Los seis campos son obligatorios y no puede haber otros: se rechazan propiedades desconocidas, claves
+repetidas, JSON adicional, `null` y tipos distintos. Si el objeto trae `type`, `payload` o `eventId` se
+trata como envelope v1 (y fallará por propiedades desconocidas), nunca como una mezcla.
+
+Shipments no envía `eventId`, `traceId`, `correlationId`, direcciones ni `servicioId`, así que Notify los
+completa al convertir el mensaje al mismo modelo interno:
+
+- `eventId`: UUID determinista (por nombre) calculado con `shipmentId`, `status` y el instante
+  normalizado a segundos y nanosegundos. **El mismo evento reentregado da el mismo `eventId`** (se
+  descarta como duplicado) y estados distintos del mismo envío dan identidades distintas, por lo que
+  ACEPTADO, EN_RUTA y ENTREGADO se envían los tres. `…:00Z` y `…:00.000Z` son el mismo instante.
+- `traceId` y `correlationId`: `shipment-<shipmentId>`.
+- `channel`: `EMAIL`. Las direcciones y `servicioId` quedan ausentes: el correo omite la línea `Destino`.
+
+Si Shipments reintentara una publicación creando un `Instant` nuevo, se consideraría otro evento; hoy no
+reintenta. Para el envelope v1 el `eventId` lo aporta el productor.
 
 Publicación de desarrollo desde PowerShell, con el broker de Compose iniciado y
 Notify conectado y topología ya aprovisionada por rabbitmq-admin:
@@ -180,15 +255,17 @@ La API management es una herramienta de prueba; el productor real usará AMQP.
 ## Momentos e integración pendiente
 
 Requisito explícito: notificación email/push en **ACEPTADO, EN_RUTA y ENTREGADO**.
-El servicio SMTP previo está implementado, pero el listener actual solo registra el payload. Propuesta para acordar con operaciones: generar ticket
+`EmailService` envía el correo cuando `EMAIL_ENABLED=true`; con `false` los comandos van a la DLQ. Propuesta para acordar con operaciones: generar ticket
 de picking y etiqueta al persistir **ACEPTADO**, para preparar el envío antes de
 EN_BODEGA/EN_RUTA. Si operaciones prefiere etiquetar al entrar EN_BODEGA, cambiar
 el productor; Notify no realiza transiciones de estado ni decide cuándo emitir.
 
 Shipments necesitará:
 
-1. Acordar/versionar estos DTOs y el canal deseado, producir una instantánea válida
-   y propagar traceId/correlationId. Generar eventId estable por comando.
+1. Hoy Shipments publica **solo** el formato plano en `email.send`, en ACEPTADO, EN_RUTA y ENTREGADO. No
+   publica `warehouse.ticket` ni `label.gen`, así que esas colas no reciben tickets ni etiquetas mientras
+   no lo haga. Tampoco envía `eventId`, `traceId` ni `correlationId` (Notify los deriva) ni usa publisher
+   confirms: si el publish falla se pierde la notificación, como indica su propio código.
 2. Insertar comandos en una **outbox en Oracle dentro de la misma transacción** que
    persiste el cambio de estado. Un relay publicará y marcará enviados usando
    confirms y detección de mensajes no enrutados. Reintentos acotados/alertas y
@@ -216,7 +293,7 @@ emitir dos comandos con eventId distintos, una vez implementado push.
 
 ## ACK/NACK, DLQ e idempotencia
 
-En los flujos previos de bodega/etiqueta, los listeners reciben el mensaje crudo; la conversión JSON ocurre dentro del
+En los tres flujos (email, bodega y etiqueta) los listeners reciben el mensaje crudo y delegan en `CommandHandler`; la conversión JSON ocurre dentro del
 handler. Solo después de validar, ejecutar y registrar éxito se envía
 `basicAck(tag, false)`. Un duplicado registrado se confirma sin repetir el efecto.
 Todo fallo de validación, SMTP, canal o almacenamiento provoca
@@ -231,7 +308,7 @@ excepción. Un fallo de transporte al confirmar/rechazar puede dejar la disposic
 sin llegar al broker; tras cerrar el canal RabbitMQ puede reentregar. Las caídas
 de conexión no se pueden convertir en una garantía de entrega a DLQ.
 
-Registro en memoria por `flujo:eventId`, TTL 24 horas, máximo 10.000 éxitos;
+Registro en memoria por `flujo:eventId` (para Shipments, el `eventId` derivado), TTL 24 horas, máximo 10.000 éxitos;
 al llenarse expulsa el más antiguo. Un bloqueo en esta JVM serializa
 check/efecto/registro, incluso con entregas concurrentes. Se registra antes del ACK
 y solo tras éxito; una pérdida del ACK puede deduplicarse mientras viva la entrada.
@@ -270,7 +347,9 @@ específico. No se inventan esos requisitos.
 | RABBITMQ_USERNAME / RABBITMQ_PASSWORD | Obligatorias; usuario dedicado |
 | RABBITMQ_VHOST | / |
 | RABBITMQ_SSL_ENABLED | false; activar TLS en producción |
-| EMAIL_ENABLED | false; comandos EMAIL fallan si no está habilitado |
+| EMAIL_ENABLED | false; con false los comandos EMAIL fallan con `smtp_channel_disabled` y van a la DLQ |
+| WAREHOUSE_LISTENER_ENABLED | false; `true` para consumir q.cmd.warehouse |
+| LABEL_LISTENER_ENABLED | false; `true` para consumir q.cmd.label |
 | SMTP_HOST / SMTP_PORT | localhost / 1025 |
 | SMTP_USERNAME / SMTP_PASSWORD | Vacíos para servidor local; secretos por entorno |
 | SMTP_AUTH / SMTP_STARTTLS | false / false; STARTTLS exige negociación si true |
@@ -338,9 +417,8 @@ health y métricas confían en ese aislamiento de red, no son endpoints público
 Tags de cardinalidad acotada por cola. eventId/traceId/correlationId se incluyen
 en logs, no en tags. Mensajes ilegibles/no validados usan `unknown`; no se extraen
 campos sin validar para evitar inyección en logs. Se registra cola, resultado y
-clase de error sin excepción completa. Excepción temporal: el listener de email
-registra el cuerpo completo para inspección; utiliza datos de prueba y restringe
-el acceso a esos logs. No publiques secretos en los mensajes.
+código de motivo propio o clase de error, sin excepción completa. Ningún listener registra el
+cuerpo del mensaje ni datos del destinatario (hay pruebas que lo comprueban).
 
 Un incremento de rechazos **no acredita un mensaje observado en DLQ**. Monitorizar
 por separado profundidad y tasas reales de las DLQ usando management/Prometheus de
@@ -363,10 +441,20 @@ datos personales. No hay política automática de borrado implementada.
 Sin la propiedad, RabbitIntegrationTests se omite explícitamente; las pruebas unitarias
 no se presentan como validación del broker. La integración declara los exchanges/colas
 reales, verifica ambos bindings, límites de comodines, aislamiento y x-death de las tres
-DLQ, y ejecuta los listeners para archivos, duplicados y SMTP deshabilitado.
-ProcessingTests verifica ACK posterior al efecto, fallos sin ACK, JSON inválido,
-validación, concurrencia, error antes del listener, pérdida de ACK, contenido del PDF
-y envío SMTP real con GreenMail para los tres estados.
+DLQ, y ejecuta los listeners para archivos, duplicados y el rechazo a la DLQ del correo con SMTP
+deshabilitado.
+
+- `EmailListenerTests`: el consumidor de email con `JavaMailSender` y `Channel` simulados (sin SMTP ni
+  broker): ambos formatos, ACK posterior al envío, duplicados, estados distintos del mismo envío,
+  mensajes inválidos, SMTP desactivado y caído, fallo del ACK y ausencia de datos personales en logs.
+- `WarehouseLabelListenerTests`: los otros dos consumidores con servicios simulados: éxito, duplicado,
+  error de procesamiento con reintento, mensajes inválidos o de otro flujo y NACK sin reencolado.
+- `CommandDecoderTests`: ambos contratos, derivación determinista del `eventId` y 76 entradas
+  inválidas (tipos, `timestamp`, estados, propiedades desconocidas, claves repetidas).
+- `ListenerActivationTests`: cola de cada consumidor y variables de entorno que los habilitan.
+- `ProcessingTests`: ACK posterior al efecto, fallos sin ACK, JSON inválido, validación, concurrencia,
+  error antes del listener, pérdida de ACK, contenido del PDF y envío SMTP real con GreenMail para los
+  tres estados.
 No prueba Oracle, Shipments/Catalog desplegados ni entregabilidad de un proveedor SMTP.
 
 El wrapper se fijó en Maven 3.9.16; Java y Spring Boot se conservaron.

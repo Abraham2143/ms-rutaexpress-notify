@@ -4,9 +4,6 @@ import java.nio.file.*;
 import java.time.Duration;
 import java.util.UUID;
 import java.nio.charset.StandardCharsets;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.springframework.boot.test.system.CapturedOutput;
-import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
@@ -23,7 +20,6 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.awaitility.Awaitility.await;
 
 @Testcontainers
-@ExtendWith(OutputCaptureExtension.class)
 @EnabledIfSystemProperty(named="rabbit.integration",matches="true")
 @SpringBootTest(properties={"spring.rabbitmq.listener.simple.auto-startup=false"})
 class RabbitIntegrationTests {
@@ -39,21 +35,33 @@ class RabbitIntegrationTests {
     @Autowired RabbitTemplate template;
     @Autowired RabbitListenerEndpointRegistry listeners;
 
-    @Test void externallyProvisionedQueuesAndSuccessfulArtifacts(CapturedOutput output) throws Exception {
+    @Test void externallyProvisionedQueuesDeadLetterAndSuccessfulArtifacts() throws Exception {
         // Test fixture represents rabbitmq-admin. This is never part of the application context.
         var admin = new RabbitAdmin(connectionFactory);
-        admin.declareQueue(QueueBuilder.durable("q.cmd.email").deadLetterExchange("cmd.dead.dlx").deadLetterRoutingKey("email.dead").build());
-        // Start only email: prove warehouse/label are not prerequisites for inspection.
+        admin.declareExchange(new DirectExchange("cmd.dead.dlx", true, false));
+        var emailQueue = QueueBuilder.durable("q.cmd.email").deadLetterExchange("cmd.dead.dlx").deadLetterRoutingKey("email.dlq").build();
+        var emailDlq = QueueBuilder.durable("q.cmd.email.dlq").build();
+        admin.declareQueue(emailQueue);
+        admin.declareQueue(emailDlq);
+        admin.declareBinding(BindingBuilder.bind(emailDlq).to(new DirectExchange("cmd.dead.dlx", true, false)).with("email.dlq"));
+        // Start only email: prove warehouse/label are not prerequisites for the email consumer.
         var email = listeners.getListenerContainers().stream()
                 .filter(c -> java.util.Arrays.asList(((org.springframework.amqp.rabbit.listener.AbstractMessageListenerContainer)c)
                         .getQueueNames()).contains("q.cmd.email")).findFirst().orElseThrow();
         email.start();
         try {
-            for (String payload : new String[]{"texto sin contrato", "{json inesperado", ""}) {
-                template.send("", "q.cmd.email", new Message(payload.getBytes(StandardCharsets.UTF_8), new MessageProperties()));
-                await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                        assertTrue(output.getOut().contains("Mensaje recibido de q.cmd.email: " + payload)));
+            // Invalid contract, and a valid Shipments notification while EMAIL_ENABLED=false (default):
+            // both must be rejected without requeue and end up in the DLQ, never acknowledged as sent.
+            for (byte[] payload : new byte[][]{"texto sin contrato".getBytes(StandardCharsets.UTF_8),
+                    "{json inesperado".getBytes(StandardCharsets.UTF_8), new byte[0], Fixtures.shipments()}) {
+                template.send("", "q.cmd.email", new Message(payload, new MessageProperties()));
+                Message dead = template.receive("q.cmd.email.dlq", 10000);
+                assertNotNull(dead, "email DLQ");
+                assertArrayEquals(payload, dead.getBody());
+                assertEquals("q.cmd.email", dead.getMessageProperties().getHeaders().get("x-first-death-queue"));
+                assertEquals("rejected", dead.getMessageProperties().getHeaders().get("x-first-death-reason"));
             }
+            assertEquals(0, admin.getQueueInfo("q.cmd.email").getMessageCount());
             assertNull(admin.getQueueInfo("q.cmd.warehouse"));
             assertNull(admin.getQueueInfo("q.cmd.label"));
         } finally { email.stop(); }
@@ -81,7 +89,7 @@ class RabbitIntegrationTests {
 
         listeners.start();
         try {
-            for(int i=1;i<flows.length;i++) {
+            for(int i=0;i<flows.length;i++) {
                 template.send("cmd.direct",direct[i],Fixtures.message("{invalid".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
                 Message dead=template.receive("q.cmd."+flows[i]+".dlq",10000);
                 assertNotNull(dead,flows[i]+" DLQ");
@@ -101,10 +109,15 @@ class RabbitIntegrationTests {
                     assertEquals(0,admin.getQueueInfo("q.cmd."+flow).getMessageCount());
                 });
             }
-            template.send("cmd.direct","email.send",Fixtures.message(Fixtures.json("email",UUID.randomUUID())));
-            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                    assertTrue(output.getOut().contains("email.send.v1")));
-            assertNull(template.receive("q.cmd.email.dlq",500),"inspection must not call disabled SMTP");
+            // EMAIL_ENABLED defaults to false in this context: valid commands in either format are rejected to
+            // the DLQ, because nothing was sent. Duplicate handling with a working sender is covered by the unit tests.
+            for(byte[] valid:new byte[][]{Fixtures.json("email",UUID.randomUUID()),Fixtures.shipments()}) {
+                template.send("cmd.direct","email.send",Fixtures.message(valid));
+                Message dead=template.receive("q.cmd.email.dlq",10000);
+                assertNotNull(dead,"email DLQ for a valid command while SMTP is disabled");
+                assertArrayEquals(valid,dead.getBody());
+            }
+            assertEquals(0,admin.getQueueInfo("q.cmd.email").getMessageCount());
         } finally { listeners.stop(); }
     }
     private static void provisionTestTopology(RabbitAdmin admin) {
@@ -119,13 +132,13 @@ class RabbitIntegrationTests {
         String[] patterns = {"email.*", "warehouse.#", "label.*"};
         for (int i = 0; i < flows.length; i++) {
             var queue = QueueBuilder.durable("q.cmd." + flows[i])
-                    .deadLetterExchange("cmd.dead.dlx").deadLetterRoutingKey(flows[i] + ".dead").build();
+                    .deadLetterExchange("cmd.dead.dlx").deadLetterRoutingKey(flows[i] + ".dlq").build();
             var dlq = QueueBuilder.durable("q.cmd." + flows[i] + ".dlq").build();
             admin.declareQueue(queue);
             admin.declareQueue(dlq);
             admin.declareBinding(BindingBuilder.bind(queue).to(direct).with(keys[i]));
             admin.declareBinding(BindingBuilder.bind(queue).to(topic).with(patterns[i]));
-            admin.declareBinding(BindingBuilder.bind(dlq).to(dead).with(flows[i] + ".dead"));
+            admin.declareBinding(BindingBuilder.bind(dlq).to(dead).with(flows[i] + ".dlq"));
         }
     }
 

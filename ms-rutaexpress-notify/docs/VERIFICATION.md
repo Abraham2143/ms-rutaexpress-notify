@@ -1,4 +1,68 @@
-# Verificación del consumidor mínimo de email
+# Verificación: consumidor de email integrado y formato de Shipments
+
+Fecha de los cambios: 2026-10-18. Spring Boot 4.1.1, Java 21.
+
+## Qué cambió
+
+- `EmailListener` usa `CommandHandler` y `EmailService` (antes confirmaba sin procesar).
+- `q.cmd.email` acepta el envelope v1 y la notificación plana que publica Shipments, convertida a
+  `Command` con un `eventId` determinista.
+- Se eliminó el log del cuerpo del mensaje; los fallos registran un código de motivo propio.
+- Con `EMAIL_ENABLED=false` los comandos de email van a `q.cmd.email.dlq` y no se marcan como enviados.
+- Las claves de dead-letter de la documentación y de los fixtures se alinean con rabbitmq-admin:
+  `email.dlq`, `warehouse.dlq`, `label.dlq`.
+
+## Estado de la verificación
+
+**`mvn clean verify` completo: PENDIENTE de ejecutar.** Los cambios se escribieron en un entorno sin
+acceso a Maven Central (el proxy de la sesión devolvió 403 para `repo.maven.apache.org`), de modo que
+no se pudieron descargar las dependencias ni compilar contra Spring, Mockito y JUnit. No se registra
+aquí ningún conteo de pruebas porque ninguna de ellas se ha ejecutado todavía.
+
+Ejecútalo desde la carpeta que contiene `pom.xml` y anota el resultado en esta sección:
+
+```powershell
+.\mvnw.cmd -B -ntp clean verify
+# Con Docker disponible, además la integración con RabbitMQ real:
+.\mvnw.cmd -B -ntp '-Drabbit.integration=true' clean verify
+```
+
+`RabbitIntegrationTests` solo se ejecuta con `-Drabbit.integration=true` y Docker; sin eso se informa
+como omitida. Se modificó para el comportamiento nuevo y **no se ha ejecutado**.
+
+### Lo que sí se comprobó
+
+Con Jackson 2.16.1 y stubs de las anotaciones de validación (sin Hibernate Validator) se compiló el
+paquete `contract` real y se ejecutó un arnés de 109 comprobaciones: ambos formatos aceptados, campos
+convertidos, `eventId` determinista (mismo evento = mismo id; otro estado, envío o instante = otro id;
+`…:00Z` = `…:00.000Z`; orden de campos irrelevante), y rechazo de tipos incorrectos, `timestamp`
+inválido, estados no permitidos, propiedades desconocidas, claves repetidas, JSON adicional, mezclas de
+formatos y mensajes de más de 64 KiB. Resultado: 109 comprobaciones, 0 fallos. Esto no sustituye a las
+pruebas JUnit: las anotaciones se evaluaron con un validador mínimo propio.
+
+Además se comprobó que todos los archivos `.java` modificados o nuevos no tienen errores de sintaxis.
+
+### Pruebas que ejecutará `mvn clean verify`
+
+- `EmailListenerTests` (nueva versión): ambos formatos, ACK posterior al envío, duplicados, estados
+  distintos del mismo envío, mensajes inválidos, SMTP desactivado (DLQ y reenvío posterior), fallo de
+  SMTP, fallo del ACK y ausencia de datos personales en los logs. `JavaMailSender` y `Channel` simulados.
+- `WarehouseLabelListenerTests` (nueva): éxito, duplicado, error de procesamiento con reintento,
+  mensajes inválidos o de otro flujo, NACK sin reencolado.
+- `CommandDecoderTests` (nueva): contratos, `eventId` determinista y 76 entradas inválidas.
+- `ListenerActivationTests` (nueva): cola de cada consumidor y variables que habilitan los listeners.
+- `MsRutaexpressNotifyApplicationTests`: contexto sin topología; ahora comprueba además los tres
+  consumidores y `EMAIL_ENABLED=false` por defecto.
+- `ProcessingTests`: sin cambios; cubre `CommandHandler`, servicios, SMTP real con GreenMail y PDF.
+- `RabbitIntegrationTests`: opcional (Docker).
+
+No se prueba Oracle, Shipments ni Catalog desplegados, ni la entregabilidad de un proveedor SMTP.
+
+## Verificaciones históricas (anteriores a estos cambios)
+
+Las secciones siguientes describen versiones previas y se conservan como referencia.
+
+# Verificación del consumidor mínimo de email (histórico)
 
 Fecha: 2026-10-15. Windows, Temurin Java 21.0.12.1, Spring Boot 4.1.1.
 
