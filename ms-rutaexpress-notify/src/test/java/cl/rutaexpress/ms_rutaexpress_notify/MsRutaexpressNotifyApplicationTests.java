@@ -1,5 +1,8 @@
 package cl.rutaexpress.ms_rutaexpress_notify;
 
+import cl.rutaexpress.ms_rutaexpress_notify.messaging.EmailListener;
+import cl.rutaexpress.ms_rutaexpress_notify.messaging.LabelListener;
+import cl.rutaexpress.ms_rutaexpress_notify.messaging.WarehouseListener;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.AmqpAdmin;
@@ -23,5 +26,13 @@ class MsRutaexpressNotifyApplicationTests {
         assertEquals(Map.of(), context.getBeansOfType(Declarables.class));
         assertEquals(3, listeners.getListenerContainers().size());
         assertTrue(listeners.getListenerContainers().stream().noneMatch(c -> c.isRunning()));
+    }
+
+    @Test
+    void allThreeConsumersAreWiredAndSmtpIsDisabledByDefault() {
+        assertEquals(1, context.getBeansOfType(EmailListener.class).size());
+        assertEquals(1, context.getBeansOfType(WarehouseListener.class).size());
+        assertEquals(1, context.getBeansOfType(LabelListener.class).size());
+        assertEquals("false", context.getEnvironment().getProperty("notify.email.enabled"));
     }
 }

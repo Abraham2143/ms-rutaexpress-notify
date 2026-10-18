@@ -30,7 +30,7 @@ public class CommandHandler {
             processed=guard.execute(flow+":"+command.eventId(), () -> processor.process(valid));
         } catch (Exception error) {
             metrics.counter("notify.failed", "queue", queue).increment();
-            log(command, queue, "failed", error.getClass().getSimpleName());
+            log(command, queue, "failed", reason(error));
             metrics.counter("notify.dlq.rejections", "queue", queue, "stage", "application").increment();
             channel.basicNack(tag,false,false);
             return;
@@ -40,6 +40,14 @@ public class CommandHandler {
         metrics.counter(processed ? "notify.processed" : "notify.duplicates", "queue", queue).increment();
         channel.basicAck(tag,false);
         log(command,queue,processed ? "processed" : "duplicate", "none");
+    }
+    // Only our own fixed codes (invalid_command, smtp_channel_disabled, ...) are logged. Any other message,
+    // such as a Jackson or SMTP one, may quote the payload or the recipient, so only its class name is used.
+    private static String reason(Exception error) {
+        String message = error.getMessage();
+        boolean ownCode = (error instanceof IllegalArgumentException || error instanceof IllegalStateException)
+                && message != null && message.matches("[a-z_]{1,64}");
+        return ownCode ? message : error.getClass().getSimpleName();
     }
     private void log(Command command, String queue, String result, String error) {
         LOG.info("eventId={} traceId={} correlationId={} queue={} result={} error={}",

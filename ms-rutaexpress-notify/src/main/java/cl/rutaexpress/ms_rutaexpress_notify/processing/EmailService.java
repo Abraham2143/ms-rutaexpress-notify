@@ -29,8 +29,10 @@ public class EmailService {
         var mail = new SimpleMailMessage();
         mail.setFrom(from); mail.setTo(p.destinatarioEmail());
         mail.setSubject("RutaExpress - " + p.trackingNumber() + " - " + p.status());
+        // The flat Shipments notification carries no address; the v1 envelope always does.
+        String destination = p.direccionDestino() == null ? "" : "\nDestino: " + p.direccionDestino();
         mail.setText("Hola " + p.destinatarioNombre() + ",\n\n" + state +
-                "\nTracking: " + p.trackingNumber() + "\nDestino: " + p.direccionDestino() + "\nRutaExpress");
+                "\nTracking: " + p.trackingNumber() + destination + "\nRutaExpress");
         sender.send(mail);
     }
 }
