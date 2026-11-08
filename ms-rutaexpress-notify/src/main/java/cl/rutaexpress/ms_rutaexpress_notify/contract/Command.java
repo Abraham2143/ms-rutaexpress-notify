@@ -16,11 +16,10 @@ public record Command(
             @NotBlank @Size(max=80) @Pattern(regexp="[A-Za-z0-9_-]+") String trackingNumber,
             @NotBlank @Size(max=160) @Pattern(regexp="[^\\p{Cc}]+") String destinatarioNombre,
             @NotBlank @Email @Size(max=254) @Pattern(regexp="[^\\p{Cc}]+") String destinatarioEmail,
-            // Optional at the record level: only the flat Shipments email notification omits them.
-            // CommandDecoder still requires all three for the v1 envelope (email, warehouse, label).
             @Size(max=300) @Pattern(regexp="[^\\p{Cc}]+") String direccionOrigen,
             @Size(max=300) @Pattern(regexp="[^\\p{Cc}]+") String direccionDestino,
             @Positive Long servicioId,
             @NotBlank @Pattern(regexp="CREADO|ACEPTADO|EN_BODEGA|EN_RUTA|ENTREGADO|CANCELADO") String status,
-            @Pattern(regexp="EMAIL|WEBPUSH") String channel) {}
+            @Pattern(regexp="EMAIL|WEBPUSH") String channel,
+            @Size(max=500) String comment) {} // 👈 Agregado al final
 }
