@@ -26,10 +26,6 @@ import org.springframework.mail.javamail.JavaMailSender;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-/**
- * EmailListener through the real common flow (CommandDecoder, IdempotencyGuard, CommandHandler, EmailService).
- * Only the SMTP sender and the RabbitMQ channel are mocked, so no SMTP credentials or broker are needed.
- */
 @ExtendWith(OutputCaptureExtension.class)
 class EmailListenerTests {
     private static final String PERSONAL_DATA = "ana@example.com|Ana Pérez|Avenida Ejemplo|secreto@example.com";
@@ -86,7 +82,7 @@ class EmailListenerTests {
         assertTrue(sentMail().getText().contains("Destino: Avenida Ejemplo 123, Santiago"));
     }
 
-    @ParameterizedTest @ValueSource(strings = {"ACEPTADO", "EN_RUTA", "ENTREGADO"})
+    @ParameterizedTest @ValueSource(strings = {"CREADO", "ACEPTADO", "EN_BODEGA", "EN_RUTA", "ENTREGADO", "CANCELADO"})
     void everyNotifiableStatusIsSent(String status) throws Exception {
         listener(true).receive(message(Fixtures.shipments(status)), channel);
         assertTrue(sentMail().getSubject().endsWith(" - " + status));
@@ -120,11 +116,11 @@ class EmailListenerTests {
 
     @Test void differentStatesOfTheSameShipmentAreAllSent() throws Exception {
         var listener = listener(true);
-        for (String status : new String[]{"ACEPTADO", "EN_RUTA", "ENTREGADO"})
+        for (String status : new String[]{"CREADO", "ACEPTADO", "EN_BODEGA", "EN_RUTA", "ENTREGADO"})
             listener.receive(message(Fixtures.shipments(status)), channel);
 
-        verify(sender, times(3)).send(any(SimpleMailMessage.class));
-        verify(channel, times(3)).basicAck(7, false);
+        verify(sender, times(5)).send(any(SimpleMailMessage.class));
+        verify(channel, times(5)).basicAck(7, false);
         assertEquals(0, count("notify.duplicates"));
     }
 
@@ -133,10 +129,9 @@ class EmailListenerTests {
     @ParameterizedTest @ValueSource(strings = {
             "Hola José", "{json sin terminar", "", "null", "{}", "[]",
             "{\"nuevoCampo\":42}",
-            // Shipments format with a bad field, an unknown field and a status that is not notifiable
             "{\"shipmentId\":\"42\",\"trackingNumber\":\"RUTA-0123456789AB\",\"status\":\"ACEPTADO\",\"destinatarioNombre\":\"Ana\",\"destinatarioEmail\":\"ana@example.com\",\"timestamp\":\"2026-10-18T19:30:00Z\"}",
             "{\"shipmentId\":42,\"trackingNumber\":\"RUTA-0123456789AB\",\"status\":\"ACEPTADO\",\"destinatarioNombre\":\"Ana\",\"destinatarioEmail\":\"ana@example.com\",\"timestamp\":\"2026-10-18T19:30:00Z\",\"extra\":1}",
-            "{\"shipmentId\":42,\"trackingNumber\":\"RUTA-0123456789AB\",\"status\":\"CREADO\",\"destinatarioNombre\":\"Ana\",\"destinatarioEmail\":\"ana@example.com\",\"timestamp\":\"2026-10-18T19:30:00Z\"}",
+            "{\"shipmentId\":42,\"trackingNumber\":\"RUTA-0123456789AB\",\"status\":\"DESCONOCIDO\",\"destinatarioNombre\":\"Ana\",\"destinatarioEmail\":\"ana@example.com\",\"timestamp\":\"2026-10-18T19:30:00Z\"}",
             "{\"shipmentId\":42,\"trackingNumber\":\"RUTA-0123456789AB\",\"status\":\"ACEPTADO\",\"destinatarioNombre\":\"Ana\",\"destinatarioEmail\":\"ana@example.com\",\"timestamp\":\"ayer\"}"})
     void invalidMessagesAreRejectedWithoutRequeueAndNothingIsSent(String body) throws Exception {
         listener(true).receive(message(body), channel);
@@ -172,7 +167,6 @@ class EmailListenerTests {
         listener(false).receive(message(Fixtures.shipments()), channel);
         verify(channel).basicNack(7, false, false);
 
-        // Same event republished from the DLQ after SMTP was configured: the failure was not recorded as done.
         listener(true).receive(message(Fixtures.shipments()), channel);
         verify(sender, times(1)).send(any(SimpleMailMessage.class));
         verify(channel).basicAck(7, false);
@@ -205,7 +199,7 @@ class EmailListenerTests {
         assertThrows(IOException.class, () -> listener.receive(message, channel));
         verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
 
-        listener.receive(message, channel); // broker redelivers after the channel closed
+        listener.receive(message, channel);
         verify(sender, times(1)).send(any(SimpleMailMessage.class));
         verify(channel, times(2)).basicAck(7, false);
         verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
@@ -223,7 +217,6 @@ class EmailListenerTests {
 
     @Test void failureLogsNeverContainTheBodyOrPersonalData(CapturedOutput output) throws Exception {
         listener(false).receive(message(Fixtures.shipments()), channel);
-        // Parsing errors quote the input in their message; that text must not reach the log.
         listener(true).receive(message("{\"destinatarioEmail\":\"secreto@example.com\",\"destinatarioNombre\":"), channel);
         listener(true).receive(message("Hola Ana Pérez, Avenida Ejemplo 123"), channel);
 
