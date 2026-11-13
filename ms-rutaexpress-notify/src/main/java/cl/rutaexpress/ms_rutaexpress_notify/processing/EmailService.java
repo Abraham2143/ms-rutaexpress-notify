@@ -11,23 +11,31 @@ public class EmailService {
     private final JavaMailSender sender;
     private final boolean enabled;
     private final String from;
+
     public EmailService(JavaMailSender sender, @Value("${notify.email.enabled:false}") boolean enabled,
                         @Value("${notify.email.from:notify@example.invalid}") String from) {
-        this.sender=sender; this.enabled=enabled; this.from=from;
+        this.sender = sender;
+        this.enabled = enabled;
+        this.from = from;
     }
+
     public void process(Command command) {
         if (!"EMAIL".equals(command.payload().channel()))
             throw new IllegalStateException("webpush_not_configured");
         if (!enabled) throw new IllegalStateException("smtp_channel_disabled");
         var p = command.payload();
-        String state = switch(p.status()) {
+        String state = switch (p.status()) {
+            case "CREADO" -> "Tu envío fue creado y registrado en nuestro sistema.";
             case "ACEPTADO" -> "Tu envío fue aceptado y será preparado.";
+            case "EN_BODEGA" -> "Tu envío ingresó a sucursal y está listo para despacho.";
             case "EN_RUTA" -> "Tu envío está en ruta hacia su destino.";
-            case "ENTREGADO" -> "Tu envío fue entregado.";
+            case "ENTREGADO" -> "Tu envío fue entregado exitosamente.";
+            case "CANCELADO" -> "Tu envío ha sido cancelado.";
             default -> throw new IllegalArgumentException("unsupported_status");
         };
         var mail = new SimpleMailMessage();
-        mail.setFrom(from); mail.setTo(p.destinatarioEmail());
+        mail.setFrom(from);
+        mail.setTo(p.destinatarioEmail());
         mail.setSubject("RutaExpress - " + p.trackingNumber() + " - " + p.status());
         // The flat Shipments notification carries no address; the v1 envelope always does.
         String destination = p.direccionDestino() == null ? "" : "\nDestino: " + p.direccionDestino();
