@@ -33,13 +33,21 @@ public class EmailService {
             case "CANCELADO" -> "Tu envío ha sido cancelado.";
             default -> throw new IllegalArgumentException("unsupported_status");
         };
+
         String formattedStatus = p.status().replace("_", " ");
+        String destination = p.direccionDestino() == null ? "" : "\nDestino: " + p.direccionDestino();
+
+        String extraNote = "";
+        if (p.comment() != null && !p.comment().isBlank()) {
+            String label = "CANCELADO".equals(p.status()) ? "Motivo de cancelación: " : "Observación: ";
+            extraNote = "\n" + label + p.comment().trim();
+        }
+
         var mail = new SimpleMailMessage();
         mail.setFrom(from);
         mail.setTo(p.destinatarioEmail());
         mail.setSubject("RutaExpress - " + p.trackingNumber() + " - " + formattedStatus);
-        String destination = p.direccionDestino() == null ? "" : "\nDestino: " + p.direccionDestino();
-        mail.setText("Hola " + p.destinatarioNombre() + ",\n\n" + state +
+        mail.setText("Hola " + p.destinatarioNombre() + ",\n\n" + state + extraNote +
                 "\nTracking: " + p.trackingNumber() + destination + "\nRutaExpress");
         sender.send(mail);
     }
