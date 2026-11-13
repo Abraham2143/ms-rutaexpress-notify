@@ -49,7 +49,8 @@ public class CommandDecoder {
             throw new IllegalArgumentException("invalid_command");
         if (flow.equals("email")) {
             if (payload.channel() == null ||
-                    !java.util.Set.of("ACEPTADO", "EN_RUTA", "ENTREGADO").contains(payload.status()))
+                    !java.util.Set.of("CREADO", "ACEPTADO", "EN_BODEGA", "EN_RUTA", "ENTREGADO", "CANCELADO")
+                            .contains(payload.status()))
                 throw new IllegalArgumentException("invalid_notification");
         } else if (payload.channel() != null) {
             throw new IllegalArgumentException("channel_not_applicable");
