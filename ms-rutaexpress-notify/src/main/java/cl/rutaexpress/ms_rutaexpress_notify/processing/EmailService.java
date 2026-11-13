@@ -27,8 +27,8 @@ public class EmailService {
         String state = switch (p.status()) {
             case "CREADO" -> "Tu envío fue creado y registrado en nuestro sistema.";
             case "ACEPTADO" -> "Tu envío fue aceptado y será preparado.";
-            case "EN BODEGA" -> "Tu envío ingresó a sucursal y está listo para despacho.";
-            case "EN RUTA" -> "Tu envío está en ruta hacia su destino.";
+            case "EN_BODEGA" -> "Tu envío ingresó a sucursal y está listo para despacho.";
+            case "EN_RUTA" -> "Tu envío está en ruta hacia su destino.";
             case "ENTREGADO" -> "Tu envío fue entregado exitosamente.";
             case "CANCELADO" -> "Tu envío ha sido cancelado.";
             default -> throw new IllegalArgumentException("unsupported_status");
