@@ -27,17 +27,17 @@ public class EmailService {
         String state = switch (p.status()) {
             case "CREADO" -> "Tu envío fue creado y registrado en nuestro sistema.";
             case "ACEPTADO" -> "Tu envío fue aceptado y será preparado.";
-            case "EN_BODEGA" -> "Tu envío ingresó a sucursal y está listo para despacho.";
-            case "EN_RUTA" -> "Tu envío está en ruta hacia su destino.";
+            case "EN BODEGA" -> "Tu envío ingresó a sucursal y está listo para despacho.";
+            case "EN RUTA" -> "Tu envío está en ruta hacia su destino.";
             case "ENTREGADO" -> "Tu envío fue entregado exitosamente.";
             case "CANCELADO" -> "Tu envío ha sido cancelado.";
             default -> throw new IllegalArgumentException("unsupported_status");
         };
+        String formattedStatus = p.status().replace("_", " ");
         var mail = new SimpleMailMessage();
         mail.setFrom(from);
         mail.setTo(p.destinatarioEmail());
-        mail.setSubject("RutaExpress - " + p.trackingNumber() + " - " + p.status());
-        // The flat Shipments notification carries no address; the v1 envelope always does.
+        mail.setSubject("RutaExpress - " + p.trackingNumber() + " - " + formattedStatus);
         String destination = p.direccionDestino() == null ? "" : "\nDestino: " + p.direccionDestino();
         mail.setText("Hola " + p.destinatarioNombre() + ",\n\n" + state +
                 "\nTracking: " + p.trackingNumber() + destination + "\nRutaExpress");

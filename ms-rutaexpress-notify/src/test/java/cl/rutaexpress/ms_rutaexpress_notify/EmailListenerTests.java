@@ -55,7 +55,7 @@ class EmailListenerTests {
     // ---------------------------------------------------------------- successful processing
 
     @Test void shipmentsFormatSendsEmailAndAcksOnlyAfterSending() throws Exception {
-        listener(true).receive(message(Fixtures.shipments("EN_RUTA")), channel);
+        listener(true).receive(message(Fixtures.shipments("EN RUTA")), channel);
 
         InOrder order = inOrder(sender, channel);
         order.verify(sender).send(any(SimpleMailMessage.class));
@@ -64,7 +64,7 @@ class EmailListenerTests {
         SimpleMailMessage mail = sentMail();
         assertArrayEquals(new String[]{"ana@example.com"}, mail.getTo());
         assertEquals("notify@example.com", mail.getFrom());
-        assertEquals("RutaExpress - RUTA-0123456789AB - EN_RUTA", mail.getSubject());
+        assertEquals("RutaExpress - RUTA-0123456789AB - EN RUTA", mail.getSubject());
         assertTrue(mail.getText().contains("Hola Ana Pérez"));
         assertTrue(mail.getText().contains("en ruta"));
         assertFalse(mail.getText().contains("Destino:"), "Shipments sends no address");
@@ -82,7 +82,7 @@ class EmailListenerTests {
         assertTrue(sentMail().getText().contains("Destino: Avenida Ejemplo 123, Santiago"));
     }
 
-    @ParameterizedTest @ValueSource(strings = {"CREADO", "ACEPTADO", "EN_BODEGA", "EN_RUTA", "ENTREGADO", "CANCELADO"})
+    @ParameterizedTest @ValueSource(strings = {"CREADO", "ACEPTADO", "EN BODEGA", "EN RUTA", "ENTREGADO", "CANCELADO"})
     void everyNotifiableStatusIsSent(String status) throws Exception {
         listener(true).receive(message(Fixtures.shipments(status)), channel);
         assertTrue(sentMail().getSubject().endsWith(" - " + status));
@@ -116,7 +116,7 @@ class EmailListenerTests {
 
     @Test void differentStatesOfTheSameShipmentAreAllSent() throws Exception {
         var listener = listener(true);
-        for (String status : new String[]{"CREADO", "ACEPTADO", "EN_BODEGA", "EN_RUTA", "ENTREGADO"})
+        for (String status : new String[]{"CREADO", "ACEPTADO", "EN BODEGA", "EN RUTA", "ENTREGADO"})
             listener.receive(message(Fixtures.shipments(status)), channel);
 
         verify(sender, times(5)).send(any(SimpleMailMessage.class));
